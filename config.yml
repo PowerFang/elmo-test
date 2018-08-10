@@ -1,0 +1,6 @@
+s3:
+  LOG_BUCKET_NAME: mick-baskers-elmo-log-123 # 3 other places in serverless.yml need to be changed if you update this
+rds:
+  DB_USER: mickmaster # must match with the RDS version in serverless.yml unless running locally
+  DB_PASSWORD: masterpass # must match with the RDS version in serverless.yml unless running locally
+  DB_NAME: mick_baskers_elmo_test # must match with the RDS version in serverless.yml unless running locally

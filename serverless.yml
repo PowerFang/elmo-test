@@ -1,0 +1,198 @@
+service: mick-baskers
+
+provider:
+  name: aws
+  runtime: nodejs8.10
+  region: ap-southeast-2
+  stage: test
+  # Adds tags to all resources that can have them - enables easier filtering with resource groups in console
+  stackTags:
+    STACK: "${self:service}"
+    ELMO: "mick-baskers"
+  environment:
+    #DB_HOST: localhost
+    DB_HOST:
+      "Fn::GetAtt": [RdsInstance, Endpoint.Address]
+    DB_USER: ${self:custom.config.rds.DB_USER}
+    DB_PASSWORD: ${self:custom.config.rds.DB_PASSWORD}
+    DB_NAME: ${self:custom.config.rds.DB_NAME}
+    LOG_BUCKET_NAME: ${self:custom.config.s3.LOG_BUCKET_NAME}
+
+  # Assigns all valid resources in this stack to the vpc , subnets and security group
+  vpc:
+    securityGroupIds:
+      - "Fn::GetAtt": ServerlessSecurityGroup.GroupId
+      - "Fn::GetAtt": ServerlessStorageSecurityGroup.GroupId
+    subnetIds:
+      - Ref: ServerlessPrivateSubnetA
+      - Ref: ServerlessPrivateSubnetB
+      - Ref: ServerlessPrivateSubnetC
+  # Creates iam role - may not be needed
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "ec2:CreateNetworkInterface"
+        - "ec2:DescribeNetworkInterfaces"
+        - "ec2:DeleteNetworkInterface"
+        - "s3:*"
+      Resource: "*"
+custom:
+  config: ${file(./config.yml)}
+
+# The lambda function which is configured to trigger on SNS message
+functions:
+  snsMessage:
+    handler: src/snsMessage.receivedMessage
+    events:
+      - sns: SnsTopicElmoMickBaskers
+resources:
+  Resources:
+    # SNS topic resource
+    SnsTopicElmoMickBaskers:
+      Type: AWS::SNS::Topic
+    # S3 bucket that the logs will be stored in
+    LogBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: mick-baskers-elmo-log # If change Bucket Name, Change here to
+        CorsConfiguration:
+          CorsRules:
+            -
+              AllowedHeaders:
+                - Authorization
+              AllowedMethods:
+                - GET
+                - PUT
+              AllowedOrigins:
+                - '*'
+    # S3 bucket policy for the log bucket
+    LogBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket: mick-baskers-elmo-log # If change Bucket Name, Change here to
+        PolicyDocument:
+          Statement:
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+            Effect: "Allow"
+            Resource: "arn:aws:s3:::mick-baskers-elmo-log/*" # If change Bucket Name, Change here to
+            Principal: "*"
+    # VPC to enable the lambda to rds connection
+    ServerlessVPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: "10.0.0.0/16"
+    # Route table to use with the vpc and endpoints
+    VpcRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId:
+          Ref: ServerlessVPC
+    # VPC Endpoint to allow the lambda on the vpc to connect to S3
+    VpcEndpoint:
+      Type: AWS::EC2::VPCEndpoint
+      Properties:
+        VpcId:
+          Ref: ServerlessVPC
+        RouteTableIds:
+        - Ref: VpcRouteTable
+        ServiceName: com.amazonaws.ap-southeast-2.s3
+        VpcEndpointType: Gateway
+    # 3 VPC Subnets, one for each ap-southeast-2 availability zone
+    ServerlessPrivateSubnetA:
+      DependsOn: ServerlessVPC
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId:
+          Ref: ServerlessVPC
+        AvailabilityZone: ${self:provider.region}a
+        CidrBlock: "10.0.0.0/24"
+    # Associate the subnet to the route table
+    ServerlessPrivateSubnetARouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          Ref: ServerlessPrivateSubnetA
+        RouteTableId:
+          Ref: VpcRouteTable
+    ServerlessPrivateSubnetB:
+      DependsOn: ServerlessVPC
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId:
+          Ref: ServerlessVPC
+        AvailabilityZone: ${self:provider.region}b
+        CidrBlock: "10.0.1.0/24"
+    # Associate the subnet to the route table
+    ServerlessPrivateSubnetBRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          Ref: ServerlessPrivateSubnetB
+        RouteTableId:
+          Ref: VpcRouteTable
+    ServerlessPrivateSubnetC:
+      DependsOn: ServerlessVPC
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId:
+          Ref: ServerlessVPC
+        AvailabilityZone: ${self:provider.region}c
+        CidrBlock: "10.0.2.0/24"
+    # Associate the subnet to the route table
+    ServerlessPrivateSubnetCRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          Ref: ServerlessPrivateSubnetC
+        RouteTableId:
+          Ref: VpcRouteTable
+    # Security group to enable mysql connections to the RDS for the groups members
+    ServerlessSecurityGroup:
+      DependsOn: ServerlessVPC
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: SecurityGroup for Serverless Functions
+        VpcId:
+          Ref: ServerlessVPC
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+    ServerlessStorageSecurityGroup:
+      DependsOn: ServerlessVPC
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Ingress for RDS Instance
+        VpcId:
+          Ref: ServerlessVPC
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          SourceSecurityGroupId:
+            Ref: ServerlessSecurityGroup
+    # RDS Instance to hold the test data
+    RdsInstance:
+      Type: AWS::RDS::DBInstance
+      Properties:
+        Engine: mysql
+        DBName: mick_baskers_elmo_test # must match config.yml value
+        MasterUsername: mickmaster # must match config.yml value
+        MasterUserPassword: masterpass # must match config.yml value
+        DBInstanceClass: db.t2.micro
+        AllocatedStorage: 5
+        VPCSecurityGroups:
+        - "Fn::GetAtt": ServerlessStorageSecurityGroup.GroupId
+        DBSubnetGroupName:
+          Ref: ServerlessRDSSubnetGroup
+    # Subnet group for the RDS instance to assign it to the 3 availability zone subnets
+    ServerlessRDSSubnetGroup:
+      Type: AWS::RDS::DBSubnetGroup
+      Properties:
+        DBSubnetGroupDescription: "RDS Subnet Group"
+        SubnetIds:
+        - Ref: ServerlessPrivateSubnetA
+        - Ref: ServerlessPrivateSubnetB
+        - Ref: ServerlessPrivateSubnetC
